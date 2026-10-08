@@ -1,14 +1,17 @@
-import java.util.LinkedList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Created by joel on 03.01.2016.
  */
-public class Reference {
+public final class Reference {
 
-    static boolean terminate;
+    static volatile boolean terminate;
     static int port;
 
-    static List<User> users = new LinkedList<User>();
+    // Thread-safe: users are added/removed from many client threads while others iterate.
+    static final List<User> users = new CopyOnWriteArrayList<>();
 
+    private Reference() {
+    }
 }

@@ -6,92 +6,92 @@ import java.util.Scanner;
 /**
  * Created by joel on 02.01.2016.
  */
+public class Main {
 
-public class Main extends Thread{
+    static final int DEFAULT_PORT = 33456;
 
+    private static ServerSocket serverSocket;
 
+    static void main(String[] args) {
 
-    Main(){
-        Reference.terminate = false;
-    }
-
-    public static void main(String[] args) {
-
-        int port = 33456;
-        if(args.length>0){
+        int port = DEFAULT_PORT;
+        if (args.length > 0) {
             try {
                 port = Integer.parseInt(args[0]);
-                if(port<=0){
-                    System.err.println("Please enter a valid port number!");
-                    System.exit(1);
-                }
-            }catch(NumberFormatException e){
+            } catch (NumberFormatException e) {
+                port = -1;
+            }
+            if (port <= 0 || port > 65535) {
                 System.err.println("Please enter a valid port number!");
+                System.exit(1);
             }
         }
 
         Reference.port = port;
+        Reference.terminate = false;
 
-        Main listener = new Main();
-        listener.start();
+        Thread listener = Thread.ofPlatform().name("listener").start(Main::listen);
 
-        while(!Reference.terminate){
-            Scanner reader = new Scanner(System.in);
-            String command = reader.nextLine();
-
-            if (command.equals("q") || command.equals("Q")){
-                System.out.println("debug!");
-                for (User u: Reference.users){
-                    u.stopNote("Server closed!");
+        try (Scanner reader = new Scanner(System.in)) {
+            while (!Reference.terminate && reader.hasNextLine()) {
+                String command = reader.nextLine().trim();
+                if (command.equalsIgnoreCase("q")) {
+                    shutdown();
                 }
-                for (User u: Reference.users){
-                    Reference.users.remove(u);
-                }
-
-                Reference.terminate = true;
-
             }
         }
 
-    }
-
-    public static void removeUser(User u){
-        System.out.println(Reference.users.size());
-        Reference.users.remove(u);
-        System.out.println(Reference.users.size());
-    }
-
-    @Override
-    public void run(){
-        ServerSocket serverSocket = null;
         try {
-            serverSocket = new ServerSocket(Reference.port);
-        } catch (IOException e) {
-            System.err.println("Server was not able to open on port: " + Reference.port + "\nPlease make sure the port is not used by any other Application");
+            listener.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
-
-        if(serverSocket != null && serverSocket.isBound()){
-            System.out.println("Server listening on port: " + Reference.port);
-
-            while(!Reference.terminate){
-                Socket client;
-
-
-                try {
-                    client = serverSocket.accept();
-                    User user = new User(client);
-
-                    Reference.users.add(user);
-
-                    user.start();
-
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-            }
-        }
-
     }
 
+    private static void shutdown() {
+        System.out.println("Shutting down server...");
+        Reference.terminate = true;
+        for (User u : Reference.users) {
+            u.stopNote("Server closed!");
+        }
+        Reference.users.clear();
+        if (serverSocket != null) {
+            try {
+                serverSocket.close();
+            } catch (IOException ignored) {
+            }
+        }
+    }
 
+    public static void removeUser(User u) {
+        if (Reference.users.remove(u)) {
+            System.out.println("User left: " + u.name + " (" + Reference.users.size() + " online)");
+        }
+    }
+
+    private static void listen() {
+        try (ServerSocket socket = new ServerSocket(Reference.port)) {
+            serverSocket = socket;
+            System.out.println("Server listening on port: " + Reference.port + " (type 'q' to quit)");
+
+            while (!Reference.terminate) {
+                try {
+                    Socket client = socket.accept();
+                    User user = new User(client);
+                    Reference.users.add(user);
+                    // One lightweight virtual thread per connected client.
+                    Thread.ofVirtual().name("user-" + client.getRemoteSocketAddress()).start(user);
+                } catch (IOException e) {
+                    if (!Reference.terminate) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        } catch (IOException e) {
+            System.err.println("Server was not able to open on port: " + Reference.port
+                    + "\nPlease make sure the port is not used by any other Application");
+            Reference.terminate = true;
+            System.exit(1);
+        }
+    }
 }

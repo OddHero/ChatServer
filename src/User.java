@@ -3,112 +3,131 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Created by joel on 02.01.2016.
  */
-public class User extends Thread {
+public class User implements Runnable {
 
-    private boolean _terminate;
-    private Socket userSocket;
-    PrintWriter out;
-    BufferedReader in;
+    private volatile boolean _terminate;
+    private final Socket userSocket;
+    private final PrintWriter out;
+    private final BufferedReader in;
 
-    String name;
-
+    volatile String name;
 
     User(Socket userSocket) throws IOException {
-
-        _terminate = false;
         this.userSocket = userSocket;
-        out = new PrintWriter(userSocket.getOutputStream(),true);
-        in = new BufferedReader(new InputStreamReader(userSocket.getInputStream()));
+        out = new PrintWriter(userSocket.getOutputStream(), true, StandardCharsets.UTF_8);
+        in = new BufferedReader(new InputStreamReader(userSocket.getInputStream(), StandardCharsets.UTF_8));
     }
 
-    public void terminate(){
+    public void terminate() {
         _terminate = true;
     }
 
-    private void register(String name){
+    private void register(String name) {
         this.name = name;
         out.println("s");
-        out.flush();
     }
 
     private void messageOut(String m) {
-        String partner = m.substring(0,m.indexOf(' '));
-        String messsage = m.substring(m.indexOf(' ')+1);
+        int space = m.indexOf(' ');
+        if (space < 0) {
+            sendError("Invalid message");
+            return;
+        }
+        String partner = m.substring(0, space);
+        String message = m.substring(space + 1);
 
-        for (User u:Reference.users) {
-            if (u.name.equals(partner)){
-                u.sendMessage("m " + this.name + " " + messsage);
+        for (User u : Reference.users) {
+            if (partner.equals(u.name)) {
+                u.sendMessage("m " + this.name + " " + message);
                 return;
             }
         }
-
-
+        sendError("Unknown user " + partner);
     }
 
-    public void sendMessage(String message){
-        out.println(message);
-        out.flush();
+    public void sendMessage(String message) {
+        synchronized (out) {
+            out.println(message);
+        }
     }
-
 
     private void userRequest() {
-        String s = "t";
-        for (User u:Reference.users) {
-            s = s + " " + u.name;
+        StringBuilder s = new StringBuilder("t");
+        for (User u : Reference.users) {
+            if (u.name != null) {
+                s.append(' ').append(u.name);
+            }
         }
-        out.println(s);
-        out.flush();
+        sendMessage(s.toString());
     }
 
-    private void sendError(String err){
-        out.println("e " + err);
-        out.flush();
+    private void sendError(String err) {
+        sendMessage("e " + err);
     }
 
-    public void killUser(){
+    public void killUser() {
+        terminate();
         Main.removeUser(this);
     }
 
-    public void stopNote(String m){
-        out.println("x " + m);
+    public void stopNote(String m) {
+        terminate();
+        sendMessage("x " + m);
+        close();
+    }
+
+    private void close() {
         try {
-            this.userSocket.close();
+            userSocket.close();
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
 
-
-
     @Override
-    public void run(){
-         String message;
-        while (! _terminate){
-            try {
-                message=in.readLine();
-                switch (message.substring(0,1)) {
-                    case "n" : register(message.substring(2).replace(' ', '_')); break;
-                    case "m" : messageOut(message.substring(2)); break;
-                    case "t" : userRequest(); break;
-                    case "x" : killUser(); break;
-
-
-                    default: sendError("Unknown Command"); break;
-
+    public void run() {
+        try {
+            while (!_terminate) {
+                String message = in.readLine();
+                if (message == null) {
+                    break; // client disconnected
                 }
-            } catch (IOException e) {
-                System.err.println("Trouble with your messege");
-
+                if (message.isEmpty()) {
+                    continue;
+                }
+                String arg = message.length() > 2 ? message.substring(2) : "";
+                switch (message.substring(0, 1)) {
+                    case "n" -> {
+                        if (arg.isBlank()) {
+                            sendError("Name must not be empty");
+                        } else {
+                            register(arg.replace(' ', '_'));
+                        }
+                    }
+                    case "m" -> {
+                        if (name == null) {
+                            sendError("Register first");
+                        } else {
+                            messageOut(arg);
+                        }
+                    }
+                    case "t" -> userRequest();
+                    case "x" -> killUser();
+                    default -> sendError("Unknown Command");
+                }
             }
-
-
+        } catch (IOException e) {
+            if (!_terminate) {
+                System.err.println("Connection error: " + e.getMessage());
+            }
+        } finally {
+            Main.removeUser(this);
+            close();
         }
-
-        Main.removeUser(this);
     }
-
 }
